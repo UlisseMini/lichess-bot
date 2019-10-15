@@ -1,22 +1,18 @@
 import chess
 from chess.variant import find_variant
-import chess.polyglot
-import engine_wrapper
-import model
 import json
-import lichess
 import logging
 import multiprocessing
 import traceback
-import logging_pool
 import signal
 import sys
 import time
 import backoff
-from conversation import Conversation, ChatLine
 from requests.exceptions import ChunkedEncodingError, ConnectionError, HTTPError
 from urllib3.exceptions import ProtocolError
-from ColorLogger import enable_color_logging
+from .ColorLogger import enable_color_logging
+from . import model, lichess, logging_pool
+from .conversation import Conversation, ChatLine
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +144,10 @@ def play_game(li, game_id, control_queue, engine_factory, user_profile, config, 
                 moves = upd["moves"].split()
                 board = update_board(board, moves[-1])
                 if not board.is_game_over() and is_engine_move(game, moves):
-                    best_move = engine.search(board, upd["wtime"], upd["btime"], upd["winc"], upd["binc"])
+                    best_move = engine.move(board, {
+                        key: upd[key] for key in upd.keys()
+                            & {'wtime', 'btime', 'winc', 'binc'}
+                    })
                     li.make_move(game.id, best_move)
                     game.abort_in(config.get("abort_time", 20))
             elif u_type == "ping":
@@ -179,51 +178,10 @@ def play_first_move(game, engine, board, li):
     moves = game.state["moves"].split()
     if is_engine_move(game, moves):
         # need to hardcode first movetime since Lichess has 30 sec limit.
-        best_move = engine.first_search(board, 10000)
+        best_move = engine.move(board, {'movetime': 10000,})
         li.make_move(game.id, best_move)
         return True
     return False
-
-
-def play_first_book_move(game, engine, board, li, config):
-    moves = game.state["moves"].split()
-    if is_engine_move(game, moves):
-        book_move = get_book_move(board, config)
-        if book_move:
-            li.make_move(game.id, book_move)
-            return True
-        else:
-            return play_first_move(game, engine, board, li)
-    return False
-
-
-def get_book_move(board, config):
-    if board.uci_variant == "chess":
-        book = config["standard"]
-    else:
-        if config.get("{}".format(board.uci_variant)):
-            book = config["{}".format(board.uci_variant)]
-        else:
-            return None
-
-    with chess.polyglot.open_reader(book) as reader:
-        try:
-            selection = config.get("selection", "weighted_random")
-            if selection == "weighted_random":
-                move = reader.weighted_choice(board).move()
-            elif selection == "uniform_random":
-                move = reader.choice(board, minimum_weight=config.get("min_weight", 1)).move()
-            elif selection == "best_move":
-                move = reader.find(board, minimum_weight=config.get("min_weight", 1)).move()
-        except IndexError:
-            # python-chess raises "IndexError" if no entries found
-            move = None
-
-    if move is not None:
-        logger.info("Got move {} from book {}".format(move, book))
-
-    return move
-
 
 def setup_board(game):
     if game.variant_name.lower() == "chess960":
@@ -330,32 +288,3 @@ def serve_lichess(
         start(li, user_profile, engine_factory, CONFIG)
     else:
         logger.error("{} is not a bot account. Please upgrade it to a bot account!".format(user_profile["username"]))
-
-from engine_wrapper import EngineWrapper
-class Engine(EngineWrapper):
-    def print(self, *args, **kwargs):
-        import sys
-        print(*args, **kwargs, file = sys.stderr, flush = True)
-
-    def __init__(self, board, options=None, silence_stderr=False):
-        self.print(f'engine initialized: options: {options}')
-
-    def first_search(self, board, movetime):
-        self.print(f'first_search movetime = {movetime}')
-        self.print(board)
-        import random
-        return random.choice(list(board.legal_moves))
-
-    def search(self, board, wtime, btime, winc, binc):
-        self.print(board)
-        import random
-        return random.choice(list(board.legal_moves))
-
-    def name(self):
-        return "test engine"
-
-    def stop(self):
-        self.print('engine stop called')
-
-    def quit(self):
-        self.print('engine quit called')
