@@ -13,7 +13,6 @@ import signal
 import sys
 import time
 import backoff
-from config import load_config
 from conversation import Conversation, ChatLine
 from requests.exceptions import ChunkedEncodingError, ConnectionError, HTTPError
 from urllib3.exceptions import ProtocolError
