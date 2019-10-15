@@ -1,4 +1,3 @@
-import argparse
 import chess
 from chess.variant import find_variant
 import chess.polyglot
@@ -16,7 +15,6 @@ import time
 import backoff
 from config import load_config
 from conversation import Conversation, ChatLine
-from functools import partial
 from requests.exceptions import ChunkedEncodingError, ConnectionError, HTTPError
 from urllib3.exceptions import ProtocolError
 from ColorLogger import enable_color_logging
@@ -138,36 +136,25 @@ def play_game(li, game_id, control_queue, engine_factory, user_profile, config, 
 
     logger.info("+++ {}".format(game))
 
-    engine_cfg = config["engine"]
-    polyglot_cfg = engine_cfg.get("polyglot", {})
-    book_cfg = polyglot_cfg.get("book", {})
-
     try:
-        if not polyglot_cfg.get("enabled") or not play_first_book_move(game, engine, board, li, book_cfg):
-            play_first_move(game, engine, board, li)
-
         engine.set_time_control(game)
 
         for binary_chunk in lines:
+            logger.debug(f'binary_chunk = {binary_chunk}')
             upd = json.loads(binary_chunk.decode('utf-8')) if binary_chunk else None
+            logger.debug(f'upd = {upd}')
             u_type = upd["type"] if upd else "ping"
             if u_type == "chatLine":
                 conversation.react(ChatLine(upd), game)
             elif u_type == "gameState":
+                logger.debug('game_state = upd')
                 game.state = upd
                 moves = upd["moves"].split()
                 board = update_board(board, moves[-1])
                 if not board.is_game_over() and is_engine_move(game, moves):
-                    if config.get("fake_think_time") and len(moves) > 9:
-                        delay = min(game.clock_initial, game.my_remaining_seconds()) * 0.015
-                        accel = 1 - max(0, min(100, len(moves) - 20)) / 150
-                        sleep = min(5, delay * accel)
-                        time.sleep(sleep)
-                    best_move = None
-                    if polyglot_cfg.get("enabled") and len(moves) <= polyglot_cfg.get("max_depth", 8) * 2 - 1:
-                        best_move = get_book_move(board, book_cfg)
-                    if best_move == None:
-                        best_move = engine.search(board, upd["wtime"], upd["btime"], upd["winc"], upd["binc"])
+                    logger.debug('calling engine.search')
+                    best_move = engine.search(board, upd["wtime"], upd["btime"], upd["winc"], upd["binc"])
+                    logger.debug(f'engine.search returned {best_move}')
                     li.make_move(game.id, best_move)
                     game.abort_in(config.get("abort_time", 20))
             elif u_type == "ping":
@@ -262,10 +249,8 @@ def setup_board(game):
 def is_white_to_move(game, moves):
     return len(moves) % 2 == (0 if game.white_starts else 1)
 
-
 def is_engine_move(game, moves):
     return game.is_white == is_white_to_move(game, moves)
-
 
 def update_board(board, move):
     uci_move = chess.Move.from_uci(move)
@@ -281,31 +266,110 @@ def intro():
     .  )___(   Play on Lichess with a bot
     """ % __version__
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Play on Lichess with a bot')
-    parser.add_argument('-u', action='store_true', help='Add this flag to upgrade your account to a bot account.')
-    parser.add_argument('-v', action='store_true', help='Verbose output. Changes log level from INFO to DEBUG.')
-    parser.add_argument('--config', help='Specify a configuration file (defaults to ./config.yml)')
-    parser.add_argument('-l', '--logfile', help="Log file to append logs to.", default=None)
-    args = parser.parse_args()
+def serve_lichess(
+        token: str,
+        engine_factory,
+        concurrency = 1,
+        time_controls = ['bullet', 'blitz', 'rapid'],
+        modes = ['casual'],
+        verbose = False,
+        upgrade = False,
+        url = 'https://lichess.org/'):
+    """
+    Serve an engine to lichess.
 
-    logging.basicConfig(level=logging.DEBUG if args.v else logging.INFO, filename=args.logfile,
+    Args
+    token: Your lichess OAUTH2 API token.
+    engine_factory: A function that can be called to get a new engine handle.
+    concurrency: How meny games to play in parallel
+    time_controls: A list of time controls to play, valid entries are
+        ultraBullet
+        bullet
+        blitz
+        rapid
+        classical
+        correspondence
+
+    modes: What modes to play, valid entires are
+        casual
+        rated
+
+    verbose: Verbose logging
+    upgrade: Upgrade to a bot account if needed
+    url: Lichess base url
+    """
+
+    logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO,
                         format="%(asctime)-15s: %(message)s")
-    enable_color_logging(debug_lvl=logging.DEBUG if args.v else logging.INFO)
+    enable_color_logging(debug_lvl=logging.DEBUG if verbose else logging.INFO)
     logger.info(intro())
-    CONFIG = load_config(args.config or "./config.yml")
-    li = lichess.Lichess(CONFIG["token"], CONFIG["url"], __version__)
+
+    li = lichess.Lichess(token, url, __version__)
 
     user_profile = li.get_profile()
     username = user_profile["username"]
     is_bot = user_profile.get("title") == "BOT"
     logger.info("Welcome {}!".format(username))
 
-    if args.u is True and is_bot is False:
+    if upgrade and is_bot is False:
         is_bot = upgrade_account(li)
 
+
+    # I'm lazy, I don't want to refactor all the code to stop using a CONFIG dict
+    # So I'll just construct it here.
+    CONFIG = {
+        'url': url,
+        'abort_time': 20,
+        'challenge': {
+            'concurrency': concurrency,
+            'sort_by': 'first', # possible values: "best", "first"
+            'accept_bot': True,
+            'max_increment': 180,
+            'min_increment': 0,
+            'variants': ['standard'],
+            'time_controls': time_controls,
+            'modes': modes,
+        },
+    }
+
     if is_bot:
-        engine_factory = partial(engine_wrapper.create_engine, CONFIG)
         start(li, user_profile, engine_factory, CONFIG)
     else:
         logger.error("{} is not a bot account. Please upgrade it to a bot account!".format(user_profile["username"]))
+
+from engine_wrapper import EngineWrapper
+class Engine(EngineWrapper):
+    def print(self, *args, **kwargs):
+        import sys
+        print(*args, **kwargs, file = sys.stderr, flush = True)
+
+    def __init__(self, board, options=None, silence_stderr=False):
+        self.print(f'engine initialized: options: {options}')
+
+    def set_time_control(self, game):
+        self.print(f'set time control: {game}')
+
+    def first_search(self, board, movetime):
+        self.print(f'first_search movetime = {movetime}')
+        self.print(board)
+        import random
+        return random.choice(list(board.legal_moves))
+
+    def search(self, board, wtime, btime, winc, binc):
+        self.print(f'search movetime = {movetime}')
+        self.print(board)
+        import random
+        return random.choice(list(board.legal_moves))
+
+    def name(self):
+        return "test engine"
+
+    def stop(self):
+        self.print('engine stop called')
+
+    def quit(self):
+        self.print('engine quit called')
+
+
+if __name__ == "__main__":
+    serve_lichess("GlZb7aVVWerumYyS", Engine, verbose=True)
