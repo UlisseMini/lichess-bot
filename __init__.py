@@ -168,7 +168,7 @@ def play_game(li, game_id, control_queue, engine_factory, user_profile, config, 
         traceback.print_exception(type(exception), exception, exception.__traceback__)
     finally:
         logger.info("--- {} Game over".format(game.url()))
-        engine.quit()
+        engine.stop()
         # This can raise queue.NoFull, but that should only happen if we're not processing
         # events fast enough and in this case I believe the exception should be raised
         control_queue.put_nowait({"type": "local_game_done"})
