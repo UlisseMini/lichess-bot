@@ -6,9 +6,6 @@ class EngineWrapper:
     def __init__(self, board, commands, options=None, silence_stderr=False):
         pass
 
-    def set_time_control(self, game):
-        pass
-
     def first_search(self, board, movetime):
         pass
 

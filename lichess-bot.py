@@ -136,24 +136,19 @@ def play_game(li, game_id, control_queue, engine_factory, user_profile, config, 
     logger.info("+++ {}".format(game))
 
     try:
-        engine.set_time_control(game)
+        play_first_move(game, engine, board, li)
 
         for binary_chunk in lines:
-            logger.debug(f'binary_chunk = {binary_chunk}')
             upd = json.loads(binary_chunk.decode('utf-8')) if binary_chunk else None
-            logger.debug(f'upd = {upd}')
             u_type = upd["type"] if upd else "ping"
             if u_type == "chatLine":
                 conversation.react(ChatLine(upd), game)
             elif u_type == "gameState":
-                logger.debug('game_state = upd')
                 game.state = upd
                 moves = upd["moves"].split()
                 board = update_board(board, moves[-1])
                 if not board.is_game_over() and is_engine_move(game, moves):
-                    logger.debug('calling engine.search')
                     best_move = engine.search(board, upd["wtime"], upd["btime"], upd["winc"], upd["binc"])
-                    logger.debug(f'engine.search returned {best_move}')
                     li.make_move(game.id, best_move)
                     game.abort_in(config.get("abort_time", 20))
             elif u_type == "ping":
@@ -345,9 +340,6 @@ class Engine(EngineWrapper):
     def __init__(self, board, options=None, silence_stderr=False):
         self.print(f'engine initialized: options: {options}')
 
-    def set_time_control(self, game):
-        self.print(f'set time control: {game}')
-
     def first_search(self, board, movetime):
         self.print(f'first_search movetime = {movetime}')
         self.print(board)
@@ -355,7 +347,6 @@ class Engine(EngineWrapper):
         return random.choice(list(board.legal_moves))
 
     def search(self, board, wtime, btime, winc, binc):
-        self.print(f'search movetime = {movetime}')
         self.print(board)
         import random
         return random.choice(list(board.legal_moves))
@@ -368,7 +359,3 @@ class Engine(EngineWrapper):
 
     def quit(self):
         self.print('engine quit called')
-
-
-if __name__ == "__main__":
-    serve_lichess("GlZb7aVVWerumYyS", Engine, verbose=True)
