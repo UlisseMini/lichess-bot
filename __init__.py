@@ -35,7 +35,7 @@ signal.signal(signal.SIGINT, signal_handler)
 
 # Stupid hack for windows error where signal only works in main thread.
 if sys.platform.startswith('win'):
-    def nothing(*_, **_):
+    def nothing(*args, **kwargs):
         pass
     signal.signal = nothing
 
