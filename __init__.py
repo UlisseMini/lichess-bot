@@ -33,6 +33,12 @@ def signal_handler(signal, frame):
 
 signal.signal(signal.SIGINT, signal_handler)
 
+# Stupid hack for windows error where signal only works in main thread.
+if sys.platform.startswith('win'):
+    def nothing(*_, **_):
+        pass
+    signal.signal = nothing
+
 def is_final(exception):
     return isinstance(exception, HTTPError) and exception.response.status_code < 500
 
